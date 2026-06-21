@@ -1,0 +1,27 @@
+{
+  "event_name": "Seattle Alleycat Test",
+  "city_hint": "Seattle, WA",
+  "profile": "driving",
+  "start": {
+    "label": "Start",
+    "address": "Cal Anderson Park"
+  },
+  "checkpoints": [
+    {
+      "label": "Volunteer Park Water Tower",
+      "address": "Volunteer Park Water Tower"
+    },
+    {
+      "label": "Fremont Troll",
+      "address": "Fremont Troll"
+    },
+    {
+      "label": "Pike Place Market",
+      "address": "Pike Place Market"
+    }
+  ],
+  "finish": {
+    "label": "Finish",
+    "address": "Gas Works Park"
+  }
+}

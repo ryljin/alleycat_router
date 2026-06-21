@@ -1,27 +1,55 @@
 {
-  "event_name": "Seattle Alleycat Test",
-  "city_hint": "Seattle, WA",
+  "event_name": "13 Assassins",
+  "city_hint": "New York, NY",
   "profile": "driving",
   "start": {
-    "label": "Start",
-    "address": "Cal Anderson Park"
+    "label": "NYPL 113th & Broadway",
+    "address": "Morningside Heights Library, 2900 Broadway, New York, NY 10025",
+    "lat": 40.8060,
+    "lon": -73.9650
   },
   "checkpoints": [
     {
-      "label": "Volunteer Park Water Tower",
-      "address": "Volunteer Park Water Tower"
+      "label": "Old Sin City",
+      "address": "2520 Park Avenue, Bronx, NY 10451",
+      "lat": 40.8170,
+      "lon": -73.9280
     },
     {
-      "label": "Fremont Troll",
-      "address": "Fremont Troll"
+      "label": "Williamsburg Bridge Base",
+      "address": "Williamsburg Bridge Pedestrian Path Manhattan Entrance, Delancey Street and Clinton Street, New York, NY",
+      "lat": 40.718742,
+      "lon": -73.989264
     },
     {
-      "label": "Pike Place Market",
-      "address": "Pike Place Market"
+      "label": "Flashdancers",
+      "address": "59 Murray St, New York, NY 10007",
+      "lat": 40.714247,
+      "lon": -74.009804
+    },
+    {
+      "label": "Sapphires",
+      "address": "333 E 60th St, New York, NY 10022",
+      "lat": 40.760619,
+      "lon": -73.962387
+    },
+    {
+      "label": "13 W 13th",
+      "address": "13 W 13th St, New York, NY 10011",
+      "lat": 40.7350,
+      "lon": -73.9960
+    },
+    {
+      "label": "Hustlers",
+      "address": "641 W 51st St, New York, NY 10019",
+      "lat": 40.7650,
+      "lon": -73.9940
     }
   ],
   "finish": {
     "label": "Finish",
-    "address": "Gas Works Park"
+    "address": "101 Avenue A, New York, NY 10009",
+    "lat": 40.7250,
+    "lon": -73.9830
   }
 }
