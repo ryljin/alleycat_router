@@ -1,0 +1,31 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDEs
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local caches / databases
+*.sqlite
+*.sqlite3
+
+# Generated outputs
+optimized_response.json
+
+# Environment variables
+.env
+.env.*
+
+# Logs
+*.log
