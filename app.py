@@ -25,7 +25,7 @@ OSRM_BASE_URL = os.getenv(
     "https://router.project-osrm.org",
 )
 
-DEFAULT_APP_USER_AGENT = "alleycat-router-dev/0.1 monarch102354@gmail.com"
+DEFAULT_APP_USER_AGENT = "alleycat-router-dev/0.1 emperorofmosquito@gmail.com"
 
 APP_USER_AGENT = os.getenv(
     "APP_USER_AGENT",

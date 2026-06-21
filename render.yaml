@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: alleycat-router
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_USER_AGENT
+        value: alleycat-router-dev/0.1 emperorofmosquito@gmail.com
