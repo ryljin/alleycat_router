@@ -32,6 +32,9 @@ APP_USER_AGENT = os.getenv(
     DEFAULT_APP_USER_AGENT,
 )
 
+GOOGLE_MAPS_MOBILE_WAYPOINT_LIMIT = 3
+GOOGLE_MAPS_DESKTOP_WAYPOINT_LIMIT = 9
+
 app = FastAPI(title="Alleycat Router")
 
 
@@ -89,9 +92,47 @@ class OptimizedLeg(BaseModel):
     distance_meters: Optional[float]
 
 
+class RouteLinkChunk(BaseModel):
+    chunk_number: int
+    title: str
+    location_indexes: list[int]
+    location_labels: list[str]
+    waypoint_count: int
+    google_maps_route_url: str
+    google_maps_simple_route_url: str
+
+
 class FreeMapLinks(BaseModel):
     google_maps_route_url: str
     google_maps_simple_route_url: str
+    mobile_waypoint_limit: int
+    desktop_waypoint_limit: int
+    mobile_route_chunks: list[RouteLinkChunk]
+    desktop_route_chunks: list[RouteLinkChunk]
+
+
+class CueSheetStop(BaseModel):
+    order_number: int
+    index: int
+    label: str
+    address: Optional[str]
+    lat: float
+    lon: float
+
+
+class CueSheetLeg(BaseModel):
+    leg_number: int
+    from_label: str
+    to_label: str
+    duration_seconds: Optional[float]
+    distance_meters: Optional[float]
+
+
+class CueSheet(BaseModel):
+    title: str
+    ordered_stops: list[CueSheetStop]
+    legs: list[CueSheetLeg]
+    plain_text: str
 
 
 class OptimizeResponse(BaseModel):
@@ -105,6 +146,7 @@ class OptimizeResponse(BaseModel):
     locations: list[ResolvedLocation]
     duration_seconds: list[list[Optional[float]]]
     distance_meters: list[list[Optional[float]]]
+    cue_sheet: CueSheet
     free_map_links: FreeMapLinks
 
 
@@ -189,8 +231,6 @@ async def geocode_location(
     location: LocationInput,
     city_hint: Optional[str],
 ) -> dict:
-    # Fast path: Gemini/AI already provided coordinates.
-    # This skips Nominatim entirely.
     if location.lat is not None and location.lon is not None:
         return {
             "query": location.address,
@@ -268,8 +308,6 @@ async def geocode_location(
 
     save_geocode(query, display_name, lat, lon)
 
-    # Nominatim public usage is rate-limited.
-    # The cache makes repeated runs fast.
     await asyncio.sleep(1.1)
 
     return {
@@ -310,7 +348,6 @@ async def fetch_osrm_matrix(
     locations: list[ResolvedLocation],
     profile: str,
 ) -> dict:
-    # OSRM expects longitude,latitude.
     coordinate_string = ";".join(
         f"{location.lon:.7f},{location.lat:.7f}"
         for location in locations
@@ -354,17 +391,25 @@ async def fetch_osrm_matrix(
     return data
 
 
+def meters_to_miles(meters: Optional[float]) -> Optional[float]:
+    if meters is None:
+        return None
+    return meters / 1609.344
+
+
+def seconds_to_minutes(seconds: Optional[float]) -> Optional[float]:
+    if seconds is None:
+        return None
+    return seconds / 60.0
+
+
 def lat_lon(location: ResolvedLocation) -> str:
-    # Google Maps expects latitude,longitude.
     return f"{location.lat:.7f},{location.lon:.7f}"
 
 
-def build_free_map_links(
-    locations: list[ResolvedLocation],
-    optimized_order: list[int],
-) -> FreeMapLinks:
-    ordered_locations = [locations[index] for index in optimized_order]
-
+def build_google_maps_urls_for_locations(
+    ordered_locations: list[ResolvedLocation],
+) -> tuple[str, str]:
     origin = ordered_locations[0]
     destination = ordered_locations[-1]
     waypoints = ordered_locations[1:-1]
@@ -397,13 +442,162 @@ def build_free_map_links(
         + simple_path
     )
 
+    return google_maps_route_url, google_maps_simple_route_url
+
+
+def build_route_chunks(
+    locations: list[ResolvedLocation],
+    optimized_order: list[int],
+    max_waypoints: int,
+) -> list[RouteLinkChunk]:
+    max_locations_per_link = max_waypoints + 2
+
+    chunks: list[RouteLinkChunk] = []
+    start_position = 0
+    chunk_number = 1
+
+    while start_position < len(optimized_order) - 1:
+        end_position = min(
+            start_position + max_locations_per_link - 1,
+            len(optimized_order) - 1,
+        )
+
+        chunk_indexes = optimized_order[start_position : end_position + 1]
+        chunk_locations = [locations[index] for index in chunk_indexes]
+
+        google_maps_route_url, google_maps_simple_route_url = (
+            build_google_maps_urls_for_locations(chunk_locations)
+        )
+
+        title = (
+            f"Segment {chunk_number}: "
+            f"{chunk_locations[0].label} → {chunk_locations[-1].label}"
+        )
+
+        chunks.append(
+            RouteLinkChunk(
+                chunk_number=chunk_number,
+                title=title,
+                location_indexes=chunk_indexes,
+                location_labels=[location.label for location in chunk_locations],
+                waypoint_count=max(0, len(chunk_locations) - 2),
+                google_maps_route_url=google_maps_route_url,
+                google_maps_simple_route_url=google_maps_simple_route_url,
+            )
+        )
+
+        if end_position >= len(optimized_order) - 1:
+            break
+
+        start_position = end_position
+        chunk_number += 1
+
+    return chunks
+
+
+def build_free_map_links(
+    locations: list[ResolvedLocation],
+    optimized_order: list[int],
+) -> FreeMapLinks:
+    ordered_locations = [locations[index] for index in optimized_order]
+
+    google_maps_route_url, google_maps_simple_route_url = (
+        build_google_maps_urls_for_locations(ordered_locations)
+    )
+
+    mobile_chunks = build_route_chunks(
+        locations=locations,
+        optimized_order=optimized_order,
+        max_waypoints=GOOGLE_MAPS_MOBILE_WAYPOINT_LIMIT,
+    )
+
+    desktop_chunks = build_route_chunks(
+        locations=locations,
+        optimized_order=optimized_order,
+        max_waypoints=GOOGLE_MAPS_DESKTOP_WAYPOINT_LIMIT,
+    )
+
     return FreeMapLinks(
         google_maps_route_url=google_maps_route_url,
         google_maps_simple_route_url=google_maps_simple_route_url,
+        mobile_waypoint_limit=GOOGLE_MAPS_MOBILE_WAYPOINT_LIMIT,
+        desktop_waypoint_limit=GOOGLE_MAPS_DESKTOP_WAYPOINT_LIMIT,
+        mobile_route_chunks=mobile_chunks,
+        desktop_route_chunks=desktop_chunks,
+    )
+
+
+def build_cue_sheet(
+    title: str,
+    locations: list[ResolvedLocation],
+    optimized_order: list[int],
+    legs: list[OptimizedLeg],
+) -> CueSheet:
+    ordered_stops: list[CueSheetStop] = []
+
+    for order_number, location_index in enumerate(optimized_order, start=1):
+        location = locations[location_index]
+
+        ordered_stops.append(
+            CueSheetStop(
+                order_number=order_number,
+                index=location.index,
+                label=location.label,
+                address=location.query or location.display_name,
+                lat=location.lat,
+                lon=location.lon,
+            )
+        )
+
+    cue_legs: list[CueSheetLeg] = []
+
+    for leg_number, leg in enumerate(legs, start=1):
+        cue_legs.append(
+            CueSheetLeg(
+                leg_number=leg_number,
+                from_label=leg.from_label,
+                to_label=leg.to_label,
+                duration_seconds=leg.duration_seconds,
+                distance_meters=leg.distance_meters,
+            )
+        )
+
+    lines: list[str] = []
+    lines.append(title)
+    lines.append("")
+    lines.append("ORDER")
+
+    for stop in ordered_stops:
+        lines.append(
+            f"{stop.order_number}. {stop.label} "
+            f"({stop.lat:.6f}, {stop.lon:.6f})"
+        )
+
+    lines.append("")
+    lines.append("LEGS")
+
+    for leg in cue_legs:
+        miles = meters_to_miles(leg.distance_meters)
+        minutes = seconds_to_minutes(leg.duration_seconds)
+
+        miles_text = "unknown mi" if miles is None else f"{miles:.2f} mi"
+        minutes_text = "unknown min" if minutes is None else f"{minutes:.1f} min"
+
+        lines.append(
+            f"{leg.leg_number}. {leg.from_label} → {leg.to_label} "
+            f"({miles_text}, {minutes_text})"
+        )
+
+    return CueSheet(
+        title=title,
+        ordered_stops=ordered_stops,
+        legs=cue_legs,
+        plain_text="\n".join(lines),
     )
 
 
 def build_optimized_response(
+    event_name: Optional[str],
     labels: list[str],
     locations: list[ResolvedLocation],
     duration_seconds: list[list[Optional[float]]],
@@ -434,6 +628,15 @@ def build_optimized_response(
             )
         )
 
+    title = event_name or "Alleycat Route"
+
+    cue_sheet = build_cue_sheet(
+        title=title,
+        locations=locations,
+        optimized_order=order,
+        legs=legs,
+    )
+
     return OptimizeResponse(
         labels=labels,
         optimized_order_indexes=order,
@@ -445,6 +648,7 @@ def build_optimized_response(
         locations=locations,
         duration_seconds=duration_seconds,
         distance_meters=distance_meters,
+        cue_sheet=cue_sheet,
         free_map_links=build_free_map_links(locations, order),
     )
 
@@ -473,8 +677,13 @@ def home() -> str:
     }
 
     h1 {
-      font-size: 24px;
+      font-size: 25px;
       margin: 0 0 8px;
+    }
+
+    h2 {
+      font-size: 19px;
+      margin-top: 18px;
     }
 
     p {
@@ -484,7 +693,7 @@ def home() -> str:
 
     textarea {
       width: 100%;
-      min-height: 300px;
+      min-height: 285px;
       box-sizing: border-box;
       border-radius: 10px;
       border: 1px solid #444;
@@ -513,6 +722,14 @@ def home() -> str:
 
     button.secondary, a.secondary {
       background: #333;
+    }
+
+    button.good, a.good {
+      background: #15803d;
+    }
+
+    button.warn, a.warn {
+      background: #92400e;
     }
 
     .card {
@@ -551,49 +768,63 @@ def home() -> str:
       border-radius: 10px;
       font-size: 12px;
     }
+
+    .segment {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid #333;
+      background: #121212;
+    }
+
+    .small {
+      font-size: 13px;
+    }
   </style>
 </head>
 <body>
   <h1>Alleycat Router</h1>
-  <p>Paste address JSON here. Coordinates are fastest. If lat/lon are included, the app skips geocoding.</p>
+  <p>Paste the JSON from Gemini. Coordinates are fastest. If lat/lon are included, the app skips geocoding.</p>
 
   <textarea id="inputJson">{
   "event_name": "13 Assassins",
   "city_hint": "New York, NY",
   "profile": "driving",
   "start": {
-    "label": "Start",
-    "address": "New York Public Library Morningside Heights, 2900 Broadway, New York, NY"
+    "label": "NYPL 113th & Broadway",
+    "address": "2900 Broadway, New York, NY 10025"
   },
   "checkpoints": [
     {
       "label": "Old Sin City",
-      "address": "2520 Park Avenue, Bronx, NY"
+      "address": "2520 Park Ave, Bronx, NY 10451"
     },
     {
-      "label": "Base of Williamsburg Bridge",
-      "address": "Williamsburg Bridge Pedestrian Path Manhattan Entrance, New York, NY"
+      "label": "Williamsburg Bridge Base",
+      "address": "Williamsburg Bridge Pedestrian Path Manhattan Entrance, Delancey Street and Clinton Street, New York, NY",
+      "lat": 40.718742,
+      "lon": -73.989264
     },
     {
-      "label": "Flashdancers Gentleman's Club",
-      "address": "59 Murray Street, New York, NY"
+      "label": "Flashdancers",
+      "address": "59 Murray St, New York, NY 10007"
     },
     {
       "label": "Sapphires",
-      "address": "333 East 60th Street, New York, NY"
+      "address": "333 E 60th St, New York, NY 10022"
     },
     {
       "label": "13 W 13th",
-      "address": "13 West 13th Street, New York, NY"
+      "address": "13 W 13th St, New York, NY 10011"
     },
     {
       "label": "Hustlers",
-      "address": "641 West 51st Street, New York, NY"
+      "address": "641 W 51st St, New York, NY 10019"
     }
   ],
   "finish": {
     "label": "Finish",
-    "address": "101 Avenue A, New York, NY"
+    "address": "101 Avenue A, New York, NY 10009"
   }
 }</textarea>
 
@@ -644,36 +875,81 @@ def home() -> str:
     function renderResult(data) {
       const resultBox = document.getElementById("result");
 
-      const orderItems = data.optimized_order_labels
-        .map(label => "<li>" + escapeHtml(label) + "</li>")
+      const orderItems = data.cue_sheet.ordered_stops
+        .map(stop => {
+          return "<li><strong>" + escapeHtml(stop.label) + "</strong><br><span class='muted small'>" +
+            escapeHtml(stop.address || "") + "<br>" +
+            stop.lat.toFixed(6) + ", " + stop.lon.toFixed(6) +
+            "</span></li>";
+        })
         .join("");
 
       const miles = data.total_distance_meters / 1609.344;
       const minutes = data.total_duration_seconds / 60;
       const waypointCount = Math.max(0, data.optimized_order_labels.length - 2);
 
-      let mapsWarning = "";
+      const mobileChunks = renderChunks(
+        data.free_map_links.mobile_route_chunks,
+        "Mobile Route Links",
+        "good"
+      );
 
-      if (waypointCount > 3) {
-        mapsWarning = "<p class='muted'>Google Maps mobile browser links may drop stops above 3 waypoints. This route has " + waypointCount + " waypoints. Use the copied optimized order if Google Maps removes any stops.</p>";
-      }
+      const desktopChunks = renderChunks(
+        data.free_map_links.desktop_route_chunks,
+        "Desktop Route Links",
+        "warn"
+      );
 
       resultBox.innerHTML = `
-        <h2>Optimized Order</h2>
+        <h2>Cue Sheet</h2>
         <ol>${orderItems}</ol>
 
-        <p><strong>Distance:</strong> ${miles.toFixed(2)} miles</p>
+        <p><strong>Total distance:</strong> ${miles.toFixed(2)} miles</p>
         <p><strong>Estimated time:</strong> ${minutes.toFixed(1)} minutes</p>
+        <p><strong>Waypoints:</strong> ${waypointCount}</p>
         <p><strong>Method:</strong> ${escapeHtml(data.method)}</p>
 
-        ${mapsWarning}
-
-        <a class="button" target="_blank" href="${data.free_map_links.google_maps_simple_route_url}">Open Google Maps Route</a>
-        <button class="secondary" onclick="copyResultJson()">Copy Full JSON</button>
+        <button class="secondary" onclick="copyCueSheet()">Copy Cue Sheet</button>
         <button class="secondary" onclick="copyOptimizedOrder()">Copy Optimized Order</button>
+        <button class="secondary" onclick="copyResultJson()">Copy Full JSON</button>
+
+        <h2>Single Full Google Maps Link</h2>
+        <p class="muted">This may drop stops if there are too many waypoints. Use the split links below for reliability.</p>
+        <a class="button" target="_blank" href="${data.free_map_links.google_maps_simple_route_url}">Open Full Route</a>
+
+        ${mobileChunks}
+        ${desktopChunks}
+
+        <h2>Plain Text Cue Sheet</h2>
+        <pre>${escapeHtml(data.cue_sheet.plain_text)}</pre>
 
         <h2>Full JSON</h2>
         <pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>
+      `;
+    }
+
+    function renderChunks(chunks, title, buttonClass) {
+      const parts = chunks.map(chunk => {
+        const labels = chunk.location_labels
+          .map(label => escapeHtml(label))
+          .join(" → ");
+
+        return `
+          <div class="segment">
+            <p><strong>${escapeHtml(chunk.title)}</strong></p>
+            <p class="muted small">${labels}</p>
+            <p class="muted small">Waypoints in this link: ${chunk.waypoint_count}</p>
+            <a class="button ${buttonClass}" target="_blank" href="${chunk.google_maps_simple_route_url}">
+              Open Segment ${chunk.chunk_number}
+            </a>
+          </div>
+        `;
+      }).join("");
+
+      return `
+        <h2>${title}</h2>
+        <p class="muted">Use these if the full route link drops stops.</p>
+        ${parts}
       `;
     }
 
@@ -688,6 +964,12 @@ def home() -> str:
       const text = lastResult.optimized_order_labels.join("\\n");
       await navigator.clipboard.writeText(text);
       alert("Copied optimized order.");
+    }
+
+    async function copyCueSheet() {
+      if (!lastResult) return;
+      await navigator.clipboard.writeText(lastResult.cue_sheet.plain_text);
+      alert("Copied cue sheet.");
     }
 
     function escapeHtml(value) {
@@ -710,6 +992,8 @@ def health() -> dict:
         "status": "ok",
         "service": APP_NAME,
         "app_user_agent": APP_USER_AGENT,
+        "google_maps_mobile_waypoint_limit": GOOGLE_MAPS_MOBILE_WAYPOINT_LIMIT,
+        "google_maps_desktop_waypoint_limit": GOOGLE_MAPS_DESKTOP_WAYPOINT_LIMIT,
     }
 
 
@@ -760,6 +1044,7 @@ async def optimize_route(payload: MatrixRequest) -> OptimizeResponse:
     labels = [location.label for location in locations]
 
     return build_optimized_response(
+        event_name=payload.event_name,
         labels=labels,
         locations=locations,
         duration_seconds=matrix["durations"],
